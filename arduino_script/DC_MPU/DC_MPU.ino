@@ -323,7 +323,7 @@ void outputTask(void *parameter) {
 void setup() {
   // Initialize serial communication
   Serial.begin(115200);
-  delay(2000);  // Wait for serial to stabilize
+  delay(5000);  // Wait for serial to stabilize
   
   // Print startup banner
   Serial.println();

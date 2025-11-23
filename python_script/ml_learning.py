@@ -14,6 +14,7 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
+from collections import Counter
 import joblib
 import warnings
 warnings.filterwarnings('ignore')
@@ -40,21 +41,37 @@ class MotorFaultClassifier:
         print(f"Dataset loaded: {X.shape[0]} samples, {X.shape[1]} features")
         print(f"Classes: {self.label_encoder.classes_}")
         
+        # Print class distribution
+        class_counts = Counter(y)
+        print(f"Class distribution: {dict(class_counts)}")
+        
         return X, y_encoded
     
     def prepare_data(self, X, y, test_size=0.2, random_state=42):
         """Split and scale data"""
+        # Check if we have enough samples for stratification
+        class_counts = Counter(y)
+        min_class_count = min(class_counts.values())
+        
+        # Only stratify if all classes have at least 2 samples
+        use_stratify = min_class_count >= 2
+        
         # Train-test split
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state, stratify=y
+            X, y, 
+            test_size=test_size, 
+            random_state=random_state, 
+            stratify=y if use_stratify else None
         )
         
         # Scale features
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_test_scaled = self.scaler.transform(X_test)
         
-        print(f"Training set: {X_train_scaled.shape[0]} samples")
+        print(f"\nTraining set: {X_train_scaled.shape[0]} samples")
         print(f"Test set: {X_test_scaled.shape[0]} samples")
+        if not use_stratify:
+            print("⚠️  Stratification disabled (too few samples per class)")
         
         return X_train_scaled, X_test_scaled, y_train, y_test
     
@@ -89,7 +106,8 @@ class MotorFaultClassifier:
             kernel='rbf',
             C=10,
             gamma='scale',
-            random_state=42
+            random_state=42,
+            probability=True  # Enable probability predictions
         )
         self.models['SVM'].fit(X_train, y_train)
         
@@ -105,7 +123,7 @@ class MotorFaultClassifier:
         # Model 5: K-Nearest Neighbors
         print("Training KNN...")
         self.models['KNN'] = KNeighborsClassifier(
-            n_neighbors=5,
+            n_neighbors=min(5, len(X_train)),  # Adjust k based on dataset size
             weights='distance'
         )
         self.models['KNN'].fit(X_train, y_train)
@@ -128,9 +146,16 @@ class MotorFaultClassifier:
             print(f"\n{name}:")
             print(f"  Accuracy: {accuracy*100:.2f}%")
             print(f"\nClassification Report:")
+            
+            # Only show classes that are in the test set
+            unique_labels = np.unique(np.concatenate([y_test, y_pred]))
+            target_names = [self.label_encoder.classes_[i] for i in unique_labels]
+            
             print(classification_report(
                 y_test, y_pred, 
-                target_names=self.label_encoder.classes_
+                labels=unique_labels,
+                target_names=target_names,
+                zero_division=0
             ))
         
         # Find best model
@@ -149,14 +174,18 @@ class MotorFaultClassifier:
         y_pred = self.best_model.predict(X_test)
         cm = confusion_matrix(y_test, y_pred)
         
+        # Get unique labels present in test set
+        unique_labels = np.unique(np.concatenate([y_test, y_pred]))
+        labels = [self.label_encoder.classes_[i] for i in unique_labels]
+        
         plt.figure(figsize=(10, 8))
         sns.heatmap(
             cm, 
             annot=True, 
             fmt='d', 
             cmap='Blues',
-            xticklabels=self.label_encoder.classes_,
-            yticklabels=self.label_encoder.classes_
+            xticklabels=labels,
+            yticklabels=labels
         )
         plt.title(f'Confusion Matrix - {self.best_model_name}')
         plt.ylabel('True Label')
@@ -204,11 +233,16 @@ class MotorFaultClassifier:
         
         # Predict
         prediction = self.best_model.predict(features_scaled)[0]
-        prediction_proba = self.best_model.predict_proba(features_scaled)[0]
+        
+        # Get probabilities if available
+        if hasattr(self.best_model, 'predict_proba'):
+            prediction_proba = self.best_model.predict_proba(features_scaled)[0]
+            confidence = prediction_proba[prediction] * 100
+        else:
+            confidence = 100.0  # If no probability available
         
         # Get label
         fault_type = self.label_encoder.inverse_transform([prediction])[0]
-        confidence = prediction_proba[prediction] * 100
         
         return fault_type, confidence
 
@@ -218,14 +252,26 @@ class MotorFaultClassifier:
 # ============================================================================
 
 if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("MOTOR FAULT DETECTION - ML TRAINING")
+    print("="*60 + "\n")
+    
     # Initialize classifier
     classifier = MotorFaultClassifier()
     
     # Load feature dataset
     X, y = classifier.load_data('motor_features.csv')
     
-    # Prepare data
-    X_train, X_test, y_train, y_test = classifier.prepare_data(X, y)
+    # Check dataset size
+    n_samples = X.shape[0]
+    
+    if n_samples < 10:
+        print(f"\n⚠️  WARNING: Small dataset detected ({n_samples} samples)")
+        print("   Results may not be reliable. Collect more data for better performance.")
+        print("   Recommended: At least 10+ samples per fault type\n")
+    
+    # Prepare data (with automatic stratification handling)
+    X_train, X_test, y_train, y_test = classifier.prepare_data(X, y, test_size=0.2)
     
     # Train models
     classifier.train_models(X_train, y_train)
@@ -234,8 +280,11 @@ if __name__ == "__main__":
     results = classifier.evaluate_models(X_test, y_test)
     
     # Plot results
-    classifier.plot_confusion_matrix(X_test, y_test)
-    classifier.plot_feature_importance()
+    try:
+        classifier.plot_confusion_matrix(X_test, y_test)
+        classifier.plot_feature_importance()
+    except Exception as e:
+        print(f"⚠️  Could not generate plots: {e}")
     
     # Save best model
     classifier.save_model('motor_fault_detector.pkl')
@@ -243,3 +292,8 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("TRAINING COMPLETE!")
     print("="*60)
+    print("\nNext Steps:")
+    print("1. Collect more data samples (recommended: 10+ per fault type)")
+    print("2. Run this script again with more data")
+    print("3. Use 'motor_fault_detector.pkl' for real-time predictions")
+    print("="*60 + "\n")
