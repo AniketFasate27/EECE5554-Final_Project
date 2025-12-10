@@ -233,5 +233,5 @@ SCL    →   GPIO 22
 - **Aniket Fasate**
 
 **Course**: EECE 5554 - Robot Snesing and Navigation
-**Semester**: Fall 2024
+**Semester**: Fall 2025
 
